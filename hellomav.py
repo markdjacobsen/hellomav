@@ -5,11 +5,14 @@
 #
 # This is a simple demonstration of how to begin building a ground control station (GCS)
 # in Python using a GUI. It allows a user to select a serial port and baud rate, connect
-# to a MAVLINK device, then send a command to arm the motor.
+# to a MAVLINK device, then send a command to arm the motor. Note that this does not
+# include any exception handling.
 #
 # The GUI is built using wxPython. MAVLINK communication is done through the pymavlink
 # library.
 
+# Acknowledgements:
+# Thank you to Andrew Tridgell, the mastermind behind pymavlink and MAVProxy
 # Thread code from http://stackoverflow.com/questions/730645/python-wxpython-doing-work-continuously-in-the-background
 # Serial port code taken from http://stackoverflow.com/questions/12090503/listing-available-com-ports-with-python
 
