@@ -35,11 +35,7 @@ class HelloMAVFrame(wx.Frame):
         wx.Frame.__init__(self, parent, id, title, pos, size, style)
         self.InitUI()
 
-        # The dispatcher object communicates with the MAV and forwards
-        # incoming MAVLINK messages to subscribed observers
-        self.dispatch = MAVDispatch()
-        # This observer will simply print each incoming MAVLINK message to the console
-        self.dispatch.add_observer(self.print_msg_to_terminal)
+
 
         self.Show()
 
@@ -87,26 +83,30 @@ class HelloMAVFrame(wx.Frame):
         sizer.Fit(self)
         return
 
-
-    def print_msg_to_terminal(self,msg):
-        print(str(msg))
-        return
-
     def on_click_connect(self,e):
         """
         Process a click on the CONNECT button
 
         Attempt to connect to the MAV using the specified port and baud rate,
         then subscribe a function called check_heartbeat that will listen for
-        a heartbeat message.
+        a heartbeat message, as well as a function that will print all incoming
+        MAVLink messages to the console.
         """
 
         port = self.cb_port.GetValue()
         baud = int(self.cb_baud.GetValue())
         self.textOutput.AppendText("Connecting to " + port + " at " + str(baud) + " baud\n")
-        #print("Connecting to " + port + " at " + str(baud) + "baud")
-        self.dispatch.connect(port,baud)
-        self.dispatch.add_observer(self.check_heartbeat)
+
+        self.master = mavutil.mavlink_connection(port, baud=baud)
+        self.thread = threading.Thread(target=self.process_messages)
+        self.thread.setDaemon(True)
+        self.thread.start()
+
+        self.master.message_hooks.append(self.check_heartbeat)
+        self.master.message_hooks.append(self.log_message)
+
+
+        print("Connecting to " + port + " at " + str(baud) + "baud")
         self.textOutput.AppendText("Waiting for APM heartbeat\n")
         return
 
@@ -119,10 +119,30 @@ class HelloMAVFrame(wx.Frame):
         """
         self.textOutput.AppendText("Arming motor\n")
         print("******arming motor*********")
-        self.dispatch.master.arducopter_arm()
-        self.dispatch.add_observer(self.check_arm_ack)
+        self.master.arducopter_arm()
 
-    def check_heartbeat(self,msg):
+        self.master.message_hooks.append(self.check_arm_ack)
+
+    def log_message(self,caller,msg):
+        if msg.get_type() != 'BAD_DATA':
+            print(str(msg))
+        return
+
+    def process_messages(self):
+        """
+        This runs continuously. The mavutil.recv_match() function will call mavutil.post_message()
+        any time a new message is received, and will notify all functions in the master.message_hooks list.
+        """
+        while True:
+            msg = self.master.recv_match(blocking=True)
+            if not msg:
+                return
+            if msg.get_type() == "BAD_DATA":
+                if mavutil.all_printable(msg.data):
+                    sys.stdout.write(msg.data)
+                    sys.stdout.flush()
+
+    def check_heartbeat(self,caller,msg):
         """
         Listens for a heartbeat message
 
@@ -133,10 +153,10 @@ class HelloMAVFrame(wx.Frame):
         """
 
         if msg.get_type() ==  'HEARTBEAT':
-            self.textOutput.AppendText("Heartbeat received from APM (system %u component %u)\n" % (self.dispatch.master.target_system, self.dispatch.master.target_system))
-            self.dispatch.remove_observer(self.check_heartbeat)
+            self.textOutput.AppendText("Heartbeat received from APM (system %u component %u)\n" % (self.master.target_system, self.master.target_system))
+            self.master.message_hooks.remove(self.check_heartbeat)
 
-    def check_arm_ack(self,msg):
+    def check_arm_ack(self, caller, msg):
         """
         Listens for confirmation of motor arming
 
@@ -149,7 +169,7 @@ class HelloMAVFrame(wx.Frame):
         if msg.get_type() == 'STATUSTEXT':
             if "Throttle armed" in msg.text:
                 self.textOutput.AppendText("Motor armed!")
-                self.dispatch.remove_observer(self.check_arm_ack)
+                self.master.message_hooks.remove(self.check_arm_ack)
 
     def OnClose(self, e):
         self._mgr.UnInit()
@@ -186,62 +206,6 @@ def serial_ports():
         except (OSError, serial.SerialException):
             pass
     return result
-
-
-class MAVDispatch:
-    """
-    Receives incoming MAVLINK messages on a separate threads and forwards
-    messages to subscribers. There are many different ways to listen for and
-    route MAVLINK messages, but this is one possible solution.
-    """
-
-    def __init__(self):
-        """
-        Create an empty list of observers
-        """
-        self._observers = []
-        return
-
-    def connect(self,port,baud):
-        """
-        This creates and stores a pymavlink connection, then creates
-        a separate thread to process incoming mavlink messages.
-        """
-        self.master = mavutil.mavlink_connection(port, baud=baud)
-        thread = threading.Thread(target=self.process_messages)
-        thread.setDaemon(True)
-        thread.start()
-        return self.master
-
-    def process_messages(self):
-        """
-        This runs continuously and processes incoming mavlink messages.
-        When a message receives, this forwards it to any subscribers.
-        """
-        while True:
-            msg = self.master.recv_match(blocking=True)
-            if not msg:
-                return
-            if msg.get_type() == "BAD_DATA":
-                if mavutil.all_printable(msg.data):
-                    sys.stdout.write(msg.data)
-                    sys.stdout.flush()
-            else:
-                for observer in self._observers:
-                    observer(msg)
-
-    def add_observer(self,observer):
-        """
-        Adds a new subscriber/observer that will receive incoming MAVLINK
-        message traffic
-        """
-        self._observers.append(observer)
-
-    def remove_observer(self,observer):
-        """
-        Removes a subscriber/observer
-        """
-        self._observers.remove(observer)
 
 
 # Create our wxPython application and show our frame
